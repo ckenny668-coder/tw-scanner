@@ -1,0 +1,65 @@
+name: keepalive
+
+on:
+  schedule:
+    - cron: "0 */8 * * *" # 每 8 小時執行一次
+  workflow_dispatch:
+
+jobs:
+  visit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Visit apps (and wake them if asleep)
+        env:
+          # 一行一個網址；之後要新增 app，只要在下面多加一行網址即可
+          APP_URLS: |
+            https://kqdbalzj8hpf78ny4reedx.streamlit.app
+            https://suypb6ilvp8ggkhnq8zjkm.streamlit.app
+            https://tw-scanner-m3nscxerxag4b8rnevfnve.streamlit.app
+        run: |
+          cat > wake.py << 'EOF'
+          import os
+          import re
+          from playwright.sync_api import sync_playwright
+
+          urls = [
+              u.strip()
+              for u in os.environ["APP_URLS"].splitlines()
+              if u.strip().startswith("http")
+          ]
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              for url in urls:
+                  page = browser.new_page()
+                  try:
+                      page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                      btn = page.get_by_role(
+                          "button", name=re.compile("get this app back up", re.I)
+                      )
+                      try:
+                          btn.wait_for(state="visible", timeout=10000)
+                          btn.click()
+                          print(f"[WOKE]  {url}")
+                          page.wait_for_timeout(45000)
+                      except Exception:
+                          print(f"[AWAKE] {url}")
+                          page.wait_for_timeout(15000)
+                  except Exception as e:
+                      print(f"[ERROR] {url}: {e}")
+                  finally:
+                      page.close()
+              browser.close()
+          EOF
+          python wake.py
