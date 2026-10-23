@@ -37,12 +37,16 @@ with st.sidebar:
     pivot_k = st.slider("波段低點：左右各幾根", 2, 8, d.pivot_k)
     min_hl = st.slider("新低點至少比前低點高", 0.0, 0.05, d.min_higher_low, 0.005, format="%.3f")
     min_gain = st.slider("3 或 6 個月漲幅大於", 0.0, 1.0, d.min_gain, 0.05)
+    use_tt = st.checkbox("要求通過 Minervini 趨勢模板（8 條）", value=False,
+                         help="股價在 150/200 日線之上、200 日線上升、50>150>200、距 52 週低 +30% 以上、"
+                              "距 52 週高 25% 內、RS 前 30%。至少需要一年的價格資料。")
     min_dv = st.number_input(f"20 日均成交金額下限（百萬{cur}）", 1, 5000, int(d.min_dollar_vol / 1e6))
     st.caption("更動參數不用重新下載價格，會立即重算。")
 
 params = replace(d, atr_ratio_max=atr_max, min_depth=depth_lo, max_depth=depth_hi,
                  max_off_high=max_off, pivot_k=pivot_k, min_higher_low=min_hl,
-                 min_gain=min_gain, min_dollar_vol=min_dv * 1e6)
+                 min_gain=min_gain, min_dollar_vol=min_dv * 1e6,
+                 require_trend_template=use_tt)
 
 # ---------------- 載入資料 ----------------
 if st.button("載入／更新價格資料", type="primary"):
@@ -68,18 +72,19 @@ except Exception as e:                      # 出錯時顯示原因，不要空�
     st.stop()
 
 asof = prices.close.index[-1].date()
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("資料截至", str(asof))
 c2.metric("股票數", f"{len(res):,}")
 c3.metric("全部通過", int(res["passed"].sum()))
 c4.metric("差一項", int(res["near_miss"].sum()))
+c5.metric("趨勢模板8條全過", int((res["trend_template"] & res["liquid"]).sum()))
 
 st.subheader("條件漏斗")
-st.dataframe(ms.funnel(res), hide_index=True, width=360)
+st.dataframe(ms.funnel(res, with_tt=use_tt), hide_index=True, width=360)
 
 cols = (["name"] if "name" in res.columns else []) + [
     "close", "ret_63", "ret_126", "avg_pct", "depth", "off_high",
-    "atr_ratio", "missing", "sector", "industry"]
+    "atr_ratio", "missing", "tt_count", "tt_missing", "sector", "industry"]
 fmt = {c: "{:.3f}" for c in ["ret_63", "ret_126", "avg_pct", "depth", "off_high", "atr_ratio"]}
 fmt["close"] = "{:.2f}"
 
