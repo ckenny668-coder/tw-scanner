@@ -1,11 +1,7 @@
-   streamlit
-   pandas
-   numpy
-   plotly
-   twstock
-   streamlit
-   yfinance
-   pandas
-   numpy
-   matplotlib
-   requests
+streamlit
+yfinance
+pandas
+numpy
+lxml
+requests
+plotly
