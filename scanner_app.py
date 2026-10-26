@@ -63,12 +63,13 @@ with st.sidebar:
                          help="股價在 150/200 日線之上、200 日線上升、50>150>200、距 52 週低 +30% 以上、"
                               "距 52 週高 25% 內、RS 前 30%。至少需要一年的價格資料。")
     min_dv = st.number_input(f"20 日均成交金額下限（百萬{cur}）", 1, 5000, int(d.min_dollar_vol / 1e6))
+    overheat = st.slider("過熱標記：高於 50 日線超過", 0.10, 1.00, d.overheat_dist, 0.05, format="%.2f")
     st.caption("更動參數不用重新下載價格，會立即重算。")
 
 params = replace(d, atr_ratio_max=atr_max, min_depth=depth_lo, max_depth=depth_hi,
                  max_off_high=max_off, pivot_k=pivot_k, min_higher_low=min_hl,
                  min_gain=min_gain, min_dollar_vol=min_dv * 1e6,
-                 require_trend_template=use_tt)
+                 require_trend_template=use_tt, overheat_dist=overheat)
 
 # ---------------- 載入資料 ----------------
 if st.button("載入／更新價格資料", type="primary"):
@@ -109,17 +110,19 @@ cols = (["name"] if "name" in res.columns else []) + [
     "atr_ratio", "missing", "tt_count", "tt_missing", "sector", "industry"]
 fmt = {c: "{:.3f}" for c in ["ret_63", "ret_126", "avg_pct", "depth", "off_high", "atr_ratio"]}
 fmt["close"] = "{:.2f}"
+fmt["dist_sma50"] = "{:.1%}"
+fmt["range_20"] = "{:.1%}"
 
 passed = res[res["passed"]]
 near = res[res["near_miss"]]
 rcols = (["name"] if "name" in res.columns else []) + [
-    "cons_score", "tt_count", "missing", "close", "ret_63", "ret_126", "avg_pct",
-    "depth", "off_high", "atr_ratio", "tt_missing", "sector", "industry"]
-min_score = st.slider("排名：整理條件（共 6 條）至少要過幾條", 3, 6, 4,
-                      help="流動性、強勢（及勾選時的趨勢模板）是硬條件；整理型態六條改看分數。"
-                           "6 = 全部通過，5 = 差一項，4 = 差兩項。")
-rank = res[res["candidate"] & (res["cons_score"] >= min_score)].sort_values(
-    ["cons_score", "tt_count", "avg_pct"], ascending=False)
+    "core_score", "contraction", "overheated", "dist_sma50", "range_20", "tt_count", "missing",
+    "close", "ret_63", "ret_126", "avg_pct", "depth", "off_high", "atr_ratio",
+    "tt_missing", "sector", "industry"]
+min_score = st.slider("排名：核心整理條件（共 5 條，不含波動收斂）至少要過幾條", 3, 5, 4,
+                      help="流動性、強勢（及勾選時的趨勢模板）是硬條件。核心 5 條：回檔幅度、低點墊高、"
+                           "站上 9/21 EMA、EMA 不下彎、週線在 10 週線上。波動收斂改為加分項，同分時排前面。")
+rank = ms.rank_table(res, min_score)
 cand = rank
 
 t1, t2, t5, t3, t4 = st.tabs(["全部通過", "差一項", "排名", "板塊共振", "看圖"])
@@ -132,7 +135,8 @@ with t2:
     st.caption("missing 欄是唯一沒過的條件。")
     st.dataframe(near[cols].style.format(fmt), width='stretch')
 with t5:
-    st.caption(f"共 {len(rank)} 檔。依整理分數、趨勢模板條數、強勢百分位排序；missing 欄是沒過的整理條件。")
+    st.caption(f"共 {len(rank)} 檔。依核心分數 → 不過熱優先 → 有波動收斂優先 → 趨勢模板條數排序。"
+               f"overheated＝收盤高於 50 日線 {params.overheat_dist:.0%} 以上（只標記不排除）；range_20＝近 20 日高低差 ÷ 現價，越小越安靜。")
     st.dataframe(rank[rcols].style.format(fmt), width='stretch')
 with t3:
     st.caption("在『排名』名單中，同一板塊有 2 檔以上者（階段 2 的雛形）。"
