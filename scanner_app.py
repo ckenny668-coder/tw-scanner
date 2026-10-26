@@ -5,6 +5,9 @@ from dataclasses import replace
 
 import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
+import yfinance as yf
+from plotly.subplots import make_subplots
 
 import momentum_scanner as ms
 import tw_scanner as tw
@@ -13,6 +16,25 @@ st.set_page_config(page_title="台股強勢整理掃描", layout="wide")
 st.title("台股強勢股 + 整理轉強掃描")
 st.caption("台股上市＋上櫃普通股 · 流程：強勢排名 → 流動性 → 上漲後整理(低點墊高、波動收斂、站上 9/21 EMA、週線在 10 週線上)。"
            "只用價量資料，不推測誰在買。結果是縮小範圍的觀察名單，請再人工看圖。")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_ohlc(tk: str):
+    """單檔還原 OHLCV（K 線需要開盤價）。失敗回傳 None。"""
+    try:
+        df = yf.download(tk, period="2y", auto_adjust=True, progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df = df[["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Close"])
+        return df if len(df) > 30 else None
+    except Exception:
+        return None
+
+
+def _missing_days(idx) -> list:
+    """沒有交易的日期（週末與休市日），讓 K 線不留空隙。"""
+    full = pd.date_range(idx.min(), idx.max(), freq="D")
+    return [d.strftime("%Y-%m-%d") for d in full.difference(pd.DatetimeIndex(idx).normalize())]
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
@@ -130,10 +152,33 @@ with t4:
         label = (lambda t: f"{t} {cand.loc[t, 'name']}") if "name" in cand.columns else (lambda t: t)
         tk = st.selectbox("選一檔", list(cand.index), format_func=label)
         n = st.slider("顯示天數", 60, 400, 180)
-        s = prices.close[tk].dropna()
-        df = pd.DataFrame({"收盤": s, "EMA9": s.ewm(span=9, adjust=False).mean(),
-                           "EMA21": s.ewm(span=21, adjust=False).mean()}).tail(n)
-        st.line_chart(df)
+        ohlc = get_ohlc(tk)
+        if ohlc is None:  # 抓不到開盤價時，用前一日收盤當開盤的近似
+            c = prices.close[tk].dropna()
+            ohlc = pd.DataFrame({"Open": c.shift(1).fillna(c), "High": prices.high[tk].reindex(c.index),
+                                 "Low": prices.low[tk].reindex(c.index), "Close": c,
+                                 "Volume": prices.volume[tk].reindex(c.index)})
+            st.caption("抓不到開盤價，K 棒開盤以前一日收盤近似。")
+        ohlc = ohlc.copy()
+        ohlc["EMA9"] = ohlc["Close"].ewm(span=9, adjust=False).mean()
+        ohlc["EMA21"] = ohlc["Close"].ewm(span=21, adjust=False).mean()
+        ohlc["SMA50"] = ohlc["Close"].rolling(50).mean()
+        d = ohlc.tail(n)
+        up, dn = ("#e03131", "#2f9e44") if market == "tw" else ("#2f9e44", "#e03131")  # 台股紅漲綠跌
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.75, 0.25], vertical_spacing=0.03)
+        fig.add_trace(go.Candlestick(x=d.index, open=d.Open, high=d.High, low=d.Low, close=d.Close,
+                                     increasing_line_color=up, increasing_fillcolor=up,
+                                     decreasing_line_color=dn, decreasing_fillcolor=dn,
+                                     name="K線", showlegend=False), row=1, col=1)
+        for col, color in (("EMA9", "#f59f00"), ("EMA21", "#1c7ed6"), ("SMA50", "#868e96")):
+            fig.add_trace(go.Scatter(x=d.index, y=d[col], mode="lines", name=col,
+                                     line=dict(width=1.3, color=color)), row=1, col=1)
+        vcol = [up if c >= o else dn for o, c in zip(d.Open, d.Close)]
+        fig.add_trace(go.Bar(x=d.index, y=d.Volume, marker_color=vcol, name="成交量", showlegend=False), row=2, col=1)
+        fig.update_xaxes(rangeslider_visible=False, rangebreaks=[dict(values=_missing_days(d.index))])
+        fig.update_layout(height=620, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", y=1.02),
+                          hovermode="x unified")
+        st.plotly_chart(fig, width='stretch')
         r = res.loc[tk]
         st.write(f"{tk} · {r.get('industry', '')} · 回檔 {r['depth']:.1%} · "
                  f"ATR 比 {r['atr_ratio']:.2f} · 前低 {r['pivot_prev']:.2f} → 最近低 {r['pivot_last']:.2f}"
